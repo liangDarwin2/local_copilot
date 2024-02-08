@@ -1,3 +1,3 @@
-PDF_PATH=/Users/lianggaoquan/Downloads/DoctorGLM.pdf
+PDF_PATH=/Users/lianggaoquan/Downloads/llama2.pdf
 EMBEDDING_MODEL_NAME=intfloat/e5-base-v2
 PLUGIN=WEB_PILOT
