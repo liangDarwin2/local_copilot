@@ -3,14 +3,14 @@ from ollama import Client
 from langchain.embeddings import HuggingFaceInstructEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import PyPDFLoader
-from googlesearch import search
-import requests
-from bs4 import BeautifulSoup
+from openai import OpenAI
 
 client = Client(host='http://localhost:11434')
+openai_client = OpenAI(base_url="http://localhost:1234/v1", api_key="not-needed")
 # MODEL = "phi:chat"
-# MODEL = "qwen:1.8b-chat"
-MODEL = "mistral:7b-instruct-q3_K_S"
+MODEL = "qwen:1.8b-chat"
+MODE = "openai"
+# MODEL = "mistral:7b-instruct-q3_K_S"
 
 def read_config_file(file="config.txt"):
     '''
@@ -96,54 +96,14 @@ def IELTS_Writing_Assistant(question):
     prompt = system_prompt.format(question=question)
     return prompt
 
-# WEB_PILOT
-def web_pilot(query,topk=3):
-    '''
-    search on the web with Google and get the topk results
-    '''
+def code_interpreter(question):
     system_prompt = """
-    Given a set of information retrieved from an online search, your task is to analyze, interpret, and synthesize this data to answer the query provided. You are expected to extract relevant details from the information at hand, ensuring your response is informed, precise, and clear. Approach the data critically, identifying key points and themes that directly address the question. Summarize your findings in a comprehensive yet concise manner, maintaining a neutral and informative tone throughout. Your goal is to provide a well-rounded answer that reflects a deep understanding of the topic, based on the evidence provided."
-
-    Information Provided: {context}
-
-    Steps:
-    1. Review the provided information carefully, focusing on the most relevant aspects related to the query.
-    2. Extract and synthesize key facts, arguments, and insights from the search results.
-    3. Organize your answer logically, directly addressing the specific question or topic.
-    4. If possible, highlight any consensus or notable perspectives revealed by the search results.
-    5. Conclude with a clear, direct answer or summary that encapsulates your understanding of the topic, based on the provided information.
-
-    And answer the following question:
-    {query}
-
-    Let's think step by step.
+    You are a coding expert that can help users solve their tasks with Python code. 
+    Write some Python code to solve the following question, in the end of the code, you should use print instead of return to output the result:
+    {question}
+    Remember, you don't have to execute the code, just write the code to solve the question.
     """
-
-    urls = []
-    # 搜索并获取前5条结果的URL
-    for i, url in enumerate(search(query, num_results=topk)):
-        urls.append(url)
-    urls = list(set(urls))
-
-    text = ""
-    for url in urls:
-        response = requests.get(url)
-        soup = BeautifulSoup(response.text, 'html.parser')
-        # 使用BeautifulSoup抓取和处理每个页面的内容
-        # 这里的处理方式会根据页面的结构而有所不同
-        text += soup.get_text()
-    
-    # 使用splitlines()方法将文本分割成行
-    lines = text.splitlines()
-
-    # 使用列表推导式去除空行
-    non_empty_lines = [line for line in lines if line.strip()]
-
-    # 将处理后的行合并回一个字符串
-    clean_text = "\n".join(non_empty_lines)
-
-    prompt = system_prompt.format(query=query, context=clean_text)
-    return prompt
+    return system_prompt.format(question=question)
 
 def predict(message, history):
     history_ollama_format = []
@@ -162,17 +122,34 @@ def predict(message, history):
         post_question = IELTS_Writing_Assistant(message)
         history_ollama_format.append({"role": "user", "content": post_question})
         print(post_question)
-    elif return_dict["PLUGIN"] == 'WEB_PILOT':
-        post_question = web_pilot(message)
+    elif return_dict["PLUGIN"] == 'CODE':
+        post_question = code_interpreter(message)
         history_ollama_format.append({"role": "user", "content": post_question})
         print(post_question)
     else:
         history_ollama_format.append({"role": "user", "content": message})
     ## END OF YOUR CODE
-
-    gpt_response = client.chat(MODEL, messages=history_ollama_format)
-    print("GPT RESPONSE: ", gpt_response)
-    return gpt_response['message']['content']
+    
+    if MODE == "ollama":
+        stream = client.chat(MODEL, messages=history_ollama_format, stream=True)
+        gpt_response = []
+        for chunk in stream:
+            gpt_response.append(chunk['message']['content'])
+            yield ''.join(gpt_response)
+    elif MODE == "openai":
+        gpt_response = []
+        completion = openai_client.chat.completions.create(
+            model="local-model", # this field is currently unused
+            messages=history_ollama_format,
+            temperature=0.7,
+            stream=True,
+        )
+        for chunk in completion:
+            if chunk.choices[0].delta.content is not None:
+                gpt_response.append(chunk.choices[0].delta.content)
+                yield ''.join(gpt_response)
+    else:
+        raise ValueError("MODE must be either 'ollama' or 'openai'")
 
 def test():
     return_dict = read_config_file()
@@ -183,4 +160,8 @@ def test():
 
 if __name__ == "__main__":
     # test()
-    gr.ChatInterface(predict).launch()
+    with gr.Blocks() as demo:
+        gr.Markdown("""<p align="center"><img src="https://www.thesoftwarereport.com/wp-content/uploads/2023/10/Copilot.jpg" style="height: 80px"/><p>""")
+        gr.HTML("""<h1 align="center">Local Copilot</h1>""")
+        gr.ChatInterface(predict)
+    demo.launch()
